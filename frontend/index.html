@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TimeFlow — Управление временем команды</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .sidebar { backdrop-filter: blur(30px); background-color: rgba(255, 255, 255, 0.65); }
+    .vibrancy { backdrop-filter: blur(20px); background-color: rgba(255, 255, 255, 0.75); }
+    .apple-hover:hover { background-color: rgba(0, 122, 255, 0.15); border-radius: 12px; }
+    .apple-card {
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 4px 12px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .apple-card:hover { transform: translateY(-4px); box-shadow: 0 4px 8px rgba(0,0,0,0.12), 0 12px 24px rgba(0,0,0,0.1), 0 24px 48px rgba(0,0,0,0.08); }
+    .modal-backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+  <div id="app">
+    <router-view></router-view>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive } = Vue;
+    const { createRouter, createWebHashHistory } = VueRouter;
+
+    // Глобальное хранилище событий
+    const eventsStore = reactive({
+      events: [
+        { id: 1, title: 'Встреча с командой', date: '2025-12-24', time: '10:00', status: 'planned', member: 'Иван Иванов', description: 'Обсуждение квартального плана' },
+        { id: 2, title: 'Обзор задач', date: '2025-12-24', time: '14:00', status: 'in_progress', member: 'Мария Петрова', description: '' },
+        { id: 3, title: 'Завершённый отчёт', date: '2025-12-23', time: '16:00', status: 'completed', member: 'Алексей Сидоров', description: 'Финальный отчёт по проекту' },
+      ],
+      nextId: 4,
+      add(event) { this.events.push({ id: this.nextId++, ...event }); },
+      update(id, event) {
+        const idx = this.events.findIndex(e => e.id === id);
+        if (idx !== -1) this.events[idx] = { ...this.events[idx], ...event };
+      },
+      delete(id) { this.events = this.events.filter(e => e.id !== id); }
+    });
+
+    // Модальное окно Create/Edit
+    const EventModal = {
+      template: `
+        <div class="fixed inset-0 modal-backdrop flex items-center justify-center z-50" @click.self="$emit('close')">
+          <div class="apple-card p-10 w-full max-w-2xl m-4">
+            <h2 class="text-3xl font-bold mb-8">{{ editing ? 'Редактировать событие' : 'Новое событие' }}</h2>
+            <form @submit.prevent="save">
+              <input v-model="form.title" placeholder="Заголовок" class="w-full px-5 py-3 mb-4 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+              <div class="grid grid-cols-2 gap-4 mb-4">
+                <input type="date" v-model="form.date" class="px-5 py-3 border border-gray-200 rounded-xl" required />
+                <input type="time" v-model="form.time" class="px-5 py-3 border border-gray-200 rounded-xl" required />
+              </div>
+              <select v-model="form.member" class="w-full px-5 py-3 mb-4 border border-gray-200 rounded-xl">
+                <option value="">Без ответственного</option>
+                <option>Иван Иванов</option>
+                <option>Мария Петрова</option>
+                <option>Алексей Сидоров</option>
+              </select>
+              <select v-model="form.status" class="w-full px-5 py-3 mb-4 border border-gray-200 rounded-xl">
+                <option value="planned">Запланировано</option>
+                <option value="in_progress">В процессе</option>
+                <option value="completed">Завершено</option>
+              </select>
+              <textarea v-model="form.description" placeholder="Описание (необязательно)" class="w-full px-5 py-3 mb-6 border border-gray-200 rounded-xl h-32 resize-none"></textarea>
+              <div class="flex justify-end gap-4">
+                <button type="button" @click="$emit('close')" class="px-8 py-3 border border-gray-300 rounded-xl hover:bg-gray-100">Отмена</button>
+                <button type="submit" class="px-8 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">Сохранить</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      `,
+      props: ['event'],
+      emits: ['close', 'save'],
+      setup(props, { emit }) {
+        const form = reactive({
+          title: props.event?.title || '',
+          date: props.event?.date || '',
+          time: props.event?.time || '',
+          member: props.event?.member || '',
+          status: props.event?.status || 'planned',
+          description: props.event?.description || ''
+        });
+        const editing = !!props.event;
+        const save = () => {
+          emit('save', { ...form, id: props.event?.id });
+          emit('close');
+        };
+        return { form, editing, save };
+      }
+    };
+
+    const LoginPage = {
+      template: `
+        <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+          <div class="apple-card p-10 w-full max-w-md">
+            <h2 class="text-3xl font-bold text-center mb-8">Вход в TimeFlow</h2>
+            <form @submit.prevent="$router.push('/items')">
+              <input type="text" placeholder="Логин" class="w-full px-5 py-3 mb-4 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+              <input type="password" placeholder="Пароль" class="w-full px-5 py-3 mb-6 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+              <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-xl font-medium hover:bg-blue-700">Войти</button>
+            </form>
+            <p class="text-center mt-6 text-sm text-gray-600">
+              Нет аккаунта? <router-link to="/register" class="text-blue-600 hover:underline">Регистрация</router-link>
+            </p>
+          </div>
+        </div>
+      `
+    };
+
+    const RegistrationPage = {
+      template: `
+        <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-emerald-100">
+          <div class="apple-card p-10 w-full max-w-md">
+            <h2 class="text-3xl font-bold text-center mb-8">Регистрация</h2>
+            <form @submit.prevent="$router.push('/items')">
+              <input type="text" placeholder="Имя" class="w-full px-5 py-3 mb-4 border rounded-xl" required />
+              <input type="text" placeholder="Фамилия" class="w-full px-5 py-3 mb-4 border rounded-xl" required />
+              <input type="text" placeholder="Логин" class="w-full px-5 py-3 mb-4 border rounded-xl" required />
+              <input type="password" placeholder="Пароль" class="w-full px-5 py-3 mb-6 border rounded-xl" required />
+              <button type="submit" class="w-full bg-green-600 text-white py-3 rounded-xl font-medium hover:bg-green-700">Зарегистрироваться</button>
+            </form>
+          </div>
+        </div>
+      `
+    };
+
+    const Layout = {
+      template: `
+        <div class="flex h-screen">
+          <aside class="w-64 sidebar border-r border-gray-200 flex flex-col shadow-lg">
+            <div class="p-6 text-2xl font-bold text-gray-900">TimeFlow</div>
+            <nav class="flex-1 px-4 space-y-1 pb-6">
+              <router-link to="/items" class="flex items-center px-4 py-3 rounded-xl apple-hover text-gray-700 font-medium">
+                <i class="fas fa-list mr-3"></i> Все события
+              </router-link>
+              <router-link to="/stats" class="flex items-center px-4 py-3 rounded-xl apple-hover text-gray-700 font-medium">
+                <i class="fas fa-chart-bar mr-3"></i> Статистика
+              </router-link>
+              <router-link to="/boss" class="flex items-center px-4 py-3 rounded-xl apple-hover text-gray-700 font-medium">
+                <i class="fas fa-user-tie mr-3"></i> Мониторинг команды
+              </router-link>
+              <router-link to="/profile" class="flex items-center px-4 py-3 rounded-xl apple-hover text-gray-700 font-medium">
+                <i class="fas fa-user mr-3"></i> Профиль
+              </router-link>
+            </nav>
+            <div class="p-6 border-t border-gray-200">
+              <button @click="$router.push('/')" class="text-red-600 font-medium hover:text-red-700">Выйти</button>
+            </div>
+          </aside>
+          <div class="flex-1 flex flex-col overflow-hidden">
+            <header class="vibrancy border-b border-gray-200 px-8 py-5 shadow-sm flex justify-between items-center">
+              <h1 class="text-2xl font-semibold text-gray-900">{{ $route.meta.title || 'TimeFlow' }}</h1>
+            </header>
+            <main class="p-8 flex-1 overflow-auto bg-gray-50">
+              <slot></slot>
+            </main>
+          </div>
+        </div>
+      `
+    };
+
+    const ItemsPage = {
+      template: `
+        <div>
+          <div class="flex justify-between items-center mb-8">
+            <h2 class="text-2xl font-semibold">Все события команды</h2>
+            <button @click="openCreate" class="bg-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-blue-700 shadow-md">+ Новое событие</button>
+          </div>
+          <div v-if="eventsStore.events.length === 0" class="text-center text-gray-500 py-12">
+            Нет событий. Создайте первое!
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <div v-for="item in eventsStore.events" :key="item.id" class="apple-card p-6">
+              <div class="flex justify-between items-start mb-4">
+                <h3 class="text-xl font-semibold">{{ item.title }}</h3>
+                <span :class="{'text-green-600': item.status === 'completed', 'text-blue-600': item.status === 'in_progress', 'text-gray-500': item.status === 'planned'}">
+                  {{ statusText(item.status) }}
+                </span>
+              </div>
+              <p class="text-gray-600 mb-2">{{ item.date }} в {{ item.time }}</p>
+              <p class="text-sm text-gray-700 mb-4">{{ item.description || 'Нет описания' }}</p>
+              <div class="flex justify-between items-center">
+                <span class="text-sm text-gray-500">{{ item.member || 'Без ответственного' }}</span>
+                <div class="flex gap-4">
+                  <button @click="openEdit(item)" class="text-blue-600 hover:text-blue-800"><i class="fas fa-edit text-lg"></i></button>
+                  <button @click="confirmDelete(item.id)" class="text-red-600 hover:text-red-800"><i class="fas fa-trash text-lg"></i></button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <teleport to="body">
+            <EventModal v-if="modalOpen" :event="currentEvent" @close="modalOpen = false" @save="saveEvent" />
+          </teleport>
+        </div>
+      `,
+      setup() {
+        const modalOpen = ref(false);
+        const currentEvent = ref(null);
+
+        const openCreate = () => {
+          currentEvent.value = null;
+          modalOpen.value = true;
+        };
+
+        const openEdit = (event) => {
+          currentEvent.value = { ...event };
+          modalOpen.value = true;
+        };
+
+        const saveEvent = (eventData) => {
+          if (eventData.id) {
+            eventsStore.update(eventData.id, eventData);
+          } else {
+            eventsStore.add(eventData);
+          }
+        };
+
+        const confirmDelete = (id) => {
+          if (confirm('Вы уверены, что хотите удалить это событие?')) {
+            eventsStore.delete(id);
+          }
+        };
+
+        const statusText = (status) => {
+          const map = { planned: 'Запланировано', in_progress: 'В процессе', completed: 'Завершено' };
+          return map[status] || status;
+        };
+
+        return { eventsStore, modalOpen, currentEvent, openCreate, openEdit, saveEvent, confirmDelete, statusText };
+      }
+    };
+
+    const StatsPage = { /* оставь свой код StatsPage */ };
+    const UserProfilePage = { /* оставь свой код UserProfilePage */ };
+    const BossPage = { /* оставь свой код BossPage */ };
+
+    const routes = [
+      { path: '/', component: LoginPage },
+      { path: '/register', component: RegistrationPage },
+      { path: '/items', component: { template: '<Layout><ItemsPage/></Layout>' }, meta: { title: 'Все события команды' } },
+      { path: '/stats', component: { template: '<Layout><StatsPage/></Layout>' }, meta: { title: 'Статистика' } },
+      { path: '/boss', component: { template: '<Layout><BossPage/></Layout>' }, meta: { title: 'Мониторинг команды' } },
+      { path: '/profile', component: { template: '<Layout><UserProfilePage/></Layout>' }, meta: { title: 'Мой профиль' } },
+    ];
+
+    const router = createRouter({
+      history: createWebHashHistory(),
+      routes
+    });
+
+    const app = createApp({});
+    app.component('Layout', Layout);
+    app.component('ItemsPage', ItemsPage);
+    app.component('EventModal', EventModal);
+    app.component('StatsPage', StatsPage);
+    app.component('UserProfilePage', UserProfilePage);
+    app.component('BossPage', BossPage);
+    app.use(router);
+    app.mount('#app');
+  </script>
+</body>
+</html>
